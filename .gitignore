@@ -1,0 +1,71 @@
+# Maven build artifacts
+target/
+*.jar
+*.war
+*.ear
+
+# IDE specific files
+.idea/
+*.iml
+.vscode/
+*.sublime-*
+.project
+.classpath
+.settings/
+
+# Temporary data directories
+scripts/tmp_data/
+tmp_data/
+
+# Logs
+*.log
+log/
+logs/
+
+# Environment variables and configuration with potential PII
+.env
+*.env
+.env.*
+*.properties
+!pom.properties
+
+# Azure and cloud provider credentials
+*.publishsettings
+PublishScripts/
+*.pfx
+*.p12
+*.key
+*.pem
+credentials.json
+*credentials*
+*connection*
+*password*
+*token*
+*secret*
+
+# OS specific files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*~
+.~*
+
+# Debug and runtime files
+.jdb/
+hs_err_pid*
+replay_pid*
+.attach_pid*
+
+# Python virtual environments (if any)
+venv/
+env/
+ENV/
+.env/
+.venv/
+pyenv/
