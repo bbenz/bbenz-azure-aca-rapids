@@ -274,11 +274,9 @@ The script generates a detailed report in `./results/performance_report.md` with
 - Speedup factors for each phase
 - Accuracy comparison between CPU and GPU models
 
-This makes it easy to demonstrate the benefits of GPU acceleration for your presentation at Cosmos DB Conf 2025.
-
 ## Inspiration
 
-This project was inspired by the [NVIDIA RAPIDS spark-rapids-examples](https://github.com/NVIDIA/spark-rapids-examples/tree/main/examples/XGBoost-Examples/agaricus) which demonstrates the use of XGBoost for mushroom classification. Our implementation extends this to use:
+This project was inspired by the [NVIDIA RAPIDS spark-rapids-examples](https://github.com/NVIDIA/spark-rapids-examples/tree/main/examples/XGBoost-Examples/agaricus) which demonstrates the use of XGBoost for mushroom classification. Our implementation is converted to Java running on Azure and extended to use:
 
 - [NVIDIA RAPIDS](https://rapids.ai/)
 - [XGBoost](https://xgboost.readthedocs.io/)
