@@ -6,18 +6,45 @@ This guide provides instructions on how to deploy and compare the performance of
 
 1. **Build the application**:
    ```bash
+   # Build with CPU support (default)
    mvn clean package
+   
+   # Or explicitly specify CPU profile
+   mvn clean package -P cpu
+   
+   # Build with GPU support
+   mvn package -P gpu
+   
+   # Build both versions at once
+   mvn clean package -P cpu
+   mvn package -P gpu
    ```
+
+   These commands will generate two different JAR files:
+   - `target/xgboost-rapids-aca-cpu-1.0-SNAPSHOT.jar` - Optimized for CPU processing
+   - `target/xgboost-rapids-aca-gpu-1.0-SNAPSHOT.jar` - Optimized for GPU processing
 
 2. **Run locally in CPU mode**:
    ```bash
-   java -jar target/xgboost-rapids-aca-1.0-SNAPSHOT.jar --use-gpu false
+   # On Linux/WSL:
+   ./run.sh --use-gpu false
+   
+   # On Windows:
+   run.cmd --use-gpu false
    ```
+
+   The scripts will automatically use the CPU-optimized JAR file.
 
 3. **Run locally in GPU mode** (requires NVIDIA GPU with CUDA drivers):
    ```bash
-   java -jar target/xgboost-rapids-aca-1.0-SNAPSHOT.jar --use-gpu true
+   # On Linux/WSL:
+   ./run.sh --use-gpu true
+   
+   # On Windows:
+   run.cmd --use-gpu true
    ```
+
+   The scripts will automatically use the GPU-optimized JAR file.
 
 ## Deploying to Azure Container Apps
 

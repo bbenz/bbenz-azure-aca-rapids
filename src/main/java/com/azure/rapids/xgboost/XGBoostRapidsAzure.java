@@ -17,12 +17,17 @@ import org.apache.spark.sql.types.DataTypes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import ml.dmlc.xgboost4j.scala.spark.XGBoostClassifier;
 import ml.dmlc.xgboost4j.scala.spark.XGBoostClassificationModel;
@@ -36,8 +41,41 @@ import scala.collection.JavaConverters;
  */
 public class XGBoostRapidsAzure {
     private static final Logger logger = LoggerFactory.getLogger(XGBoostRapidsAzure.class);
-
+    
+    // Special flag to help Spark with Java 17 compatibility
+    static {
+        logger.info("Setting up Java 17 compatibility settings");
+        
+        // Java 17 requires fewer workarounds than Java 21
+        System.setProperty("io.netty.tryReflectionSetAccessible", "true");
+        System.setProperty("spark.executor.allowSparkContext", "true");
+        
+        // XGBoost specific settings
+        System.setProperty("xgboost.use.rmm", "false");
+        System.setProperty("xgboost.rabit.tracker.disable", "true");
+        System.setProperty("xgboost.force.local.training", "true");
+    }
+    
+    /**
+     * Initialize system properties to work around Java compatibility restrictions
+     * Call this method at the very beginning of the application
+     */
+    private static void initializeJavaPlatformWorkaround() {
+        // These system properties should be set before anything else
+        System.setProperty("io.netty.tryReflectionSetAccessible", "true");
+        
+        // Needed for XGBoost
+        System.setProperty("xgboost.use.rmm", "false");
+        System.setProperty("xgboost.rabit.tracker.disable", "true");
+        System.setProperty("xgboost.force.local.training", "true");
+        
+        logger.info("Java platform workarounds initialized");
+    }
+    
     public static void main(String[] args) {
+        // Initialize Java platform workaround at the very beginning
+        initializeJavaPlatformWorkaround();
+        
         long startTime = System.currentTimeMillis();
         logger.info("Starting XGBoostRapidsAzure application with Agaricus mushroom dataset");
 
@@ -53,11 +91,15 @@ public class XGBoostRapidsAzure {
         logger.info("Configuration: Data Source: {}", dataSourcePath);
         logger.info("Configuration: Use GPU: {}", useGpu);
         
-        // Configure Spark session with RAPIDS if GPU is enabled
+        // Configure Spark session with Java 17 compatibility settings
         SparkSession.Builder sparkBuilder = SparkSession.builder()
                 .appName("XGBoostRapidsAzure")
-                .master("local[*]"); // Will use all available CPU cores, remove for cluster deployment
-        
+                .master("local[*]") // Will use all available CPU cores, remove for cluster deployment
+                .config("spark.task.cpus", "1")
+                .config("spark.executor.cores", "1")
+                .config("spark.sql.execution.arrow.enabled", "true")
+                .config("spark.databricks.xgboost.distributedMode", "false");
+
         if (useGpu) {
             logger.info("Configuring with RAPIDS GPU acceleration");
             sparkBuilder = sparkBuilder
@@ -104,12 +146,24 @@ public class XGBoostRapidsAzure {
             if (cosmosEndpoint != null && !cosmosEndpoint.isEmpty() && 
                 cosmosKey != null && !cosmosKey.isEmpty()) {
                 logger.info("Saving vector data to Cosmos DB");
+                logger.info("Cosmos DB endpoint: [{}]", cosmosEndpoint);
+                logger.info("Cosmos DB key length: {} characters", cosmosKey != null ? cosmosKey.length() : 0);
+                logger.info("Cosmos DB database: [{}]", cosmosDatabase);
+                logger.info("Cosmos DB container: [{}]", cosmosContainer);
+                
                 long cosmosStartTime = System.currentTimeMillis();
-                saveToCosmosDB(predictions, cosmosEndpoint, cosmosKey, cosmosDatabase, cosmosContainer);
+                // Use CosmosDbSaver class instead of internal implementation
+                CosmosDbSaver.savePredictionsToCosmosDb(predictions, cosmosEndpoint, cosmosKey, cosmosDatabase, cosmosContainer);
                 long cosmosEndTime = System.currentTimeMillis();
                 logger.info("Cosmos DB vector storage completed in {} ms", (cosmosEndTime - cosmosStartTime));
             } else {
-                logger.info("Skipping Cosmos DB vector storage (no credentials provided)");
+                logger.error("Skipping Cosmos DB vector storage due to missing credentials");
+                logger.error("Cosmos endpoint is {}null and {}empty", 
+                          cosmosEndpoint == null ? "" : "NOT ", 
+                          (cosmosEndpoint != null && cosmosEndpoint.isEmpty()) ? "" : "NOT ");
+                logger.error("Cosmos key is {}null and {} characters long", 
+                          cosmosKey == null ? "" : "NOT ",
+                          cosmosKey != null ? cosmosKey.length() : 0);
             }
             
             long endTime = System.currentTimeMillis();
@@ -215,6 +269,7 @@ public class XGBoostRapidsAzure {
         params.put("max_depth", 8);
         params.put("objective", "binary:logistic");
         params.put("num_round", 100);
+        params.put("silent", 0);
         
         // Configure GPU acceleration if enabled
         if (useGpu) {
@@ -224,6 +279,18 @@ public class XGBoostRapidsAzure {
             params.put("tree_method", "hist");  // CPU-only training
         }
         
+        // Disable distributed training completely
+        params.put("use_external_memory", false);
+        params.put("use_rmm", false);
+        
+        // Limit threads to avoid conflicts
+        params.put("nthread", 1);
+        
+        // Disable distributed Rabit mode
+        System.setProperty("xgboost.rabit.tracker.disable", "true");
+        
+        // Force training in single-instance mode
+        params.put("force_local_training", "true");
         params.put("eval_metric", "auc");
         
         try {
@@ -236,15 +303,20 @@ public class XGBoostRapidsAzure {
             // Create the XGBoost classifier with parameters
             XGBoostClassifier xgbClassifier = new XGBoostClassifier(scalaParams)
                     .setFeaturesCol("features")
-                    .setLabelCol("label");
+                    .setLabelCol("label")
+                    .setUseExternalMemory(false)
+                    .setMissing(0.0f);
             
-            // Explicitly set some parameters directly (belt-and-suspenders approach)
+            // Explicitly set some parameters directly
             xgbClassifier.setMaxDepth(Integer.parseInt(params.get("max_depth").toString()));
             xgbClassifier.setNumRound(Integer.parseInt(params.get("num_round").toString()));
             
             logger.info("Training with parameters: {}", params);
             
-            // Fit the model and return the classification model (not the classifier)
+            // Cache the data to avoid recomputation
+            data.cache();
+            
+            // Fit the model and return the classification model
             return xgbClassifier.fit(data);
             
         } catch (Exception e) {
@@ -271,61 +343,340 @@ public class XGBoostRapidsAzure {
     
     /**
      * Save model vectors to Cosmos DB with vector search capability
+     * With robust error handling and local file fallback
      */
     private static void saveToCosmosDB(Dataset<Row> predictions, 
                                       String endpoint, 
                                       String key, 
                                       String database, 
                                       String container) {
-        // If credentials are not provided, log error and return
-        if (endpoint == null || key == null) {
-            logger.error("Cosmos DB credentials not provided. Skipping vector storage.");
+        // If credentials are not provided, log error and use local file fallback
+        if (endpoint == null || endpoint.isEmpty() || key == null || key.isEmpty()) {
+            logger.error("Cosmos DB credentials not provided. Using local file fallback.");
+            saveToLocalFile(predictions, "vector_data_backup.json");
             return;
         }
         
-        // Process each partition of the predictions DataFrame
-        predictions.foreachPartition(partition -> {
-            // Create Cosmos DB client
-            CosmosClient cosmosClient = new CosmosClientBuilder()
-                    .endpoint(endpoint)
-                    .key(key)
-                    .consistencyLevel(ConsistencyLevel.EVENTUAL)
-                    .buildClient();
+        // Clean up any potential whitespace in credentials
+        endpoint = endpoint.trim();
+        key = key.trim();
+        
+        logger.info("Cosmos DB saving started. Endpoint: {}, Database: {}, Container: {}", 
+                endpoint, database, container);
+        
+        // Define max retry attempts for transient errors
+        final int MAX_RETRIES = 3;
+        boolean connectionSuccess = false;
+        CosmosClient testClient = null;
+        
+        // First test the connection with retry logic before attempting batch save
+        for (int retryCount = 0; retryCount < MAX_RETRIES && !connectionSuccess; retryCount++) {
+            try {
+                if (retryCount > 0) {
+                    logger.info("Retrying Cosmos DB connection (attempt {} of {})", retryCount + 1, MAX_RETRIES);
+                    // Exponential backoff between retries
+                    Thread.sleep(1000 * (long)Math.pow(2, retryCount));
+                }
+                
+                logger.info("Testing Cosmos DB connection...");
+                testClient = new CosmosClientBuilder()
+                        .endpoint(endpoint)
+                        .key(key)
+                        .consistencyLevel(ConsistencyLevel.EVENTUAL)
+                        .buildClient();
+                
+                // Verify database exists
+                testClient.getDatabase(database).read();
+                logger.info("Successfully connected to Cosmos DB database: {}", database);
+                
+                // Verify container exists
+                CosmosContainer testContainer = testClient.getDatabase(database).getContainer(container);
+                testContainer.read();
+                logger.info("Successfully connected to Cosmos DB container: {}", container);
+                
+                // Create a test document to verify write access
+                VectorDocument testDoc = new VectorDocument();
+                testDoc.setId("test-connection-" + UUID.randomUUID().toString());
+                testDoc.setFeatures(new double[]{0.1, 0.2, 0.3});
+                testDoc.setPrediction(0.0);
+                testDoc.setMushroomClass("test");
+                testDoc.setCreatedAt(System.currentTimeMillis());
+                testDoc.setDatasetType("test-connection");
+                
+                logger.info("Creating test document with ID: {}", testDoc.getId());
+                testContainer.createItem(testDoc);
+                logger.info("Test document successfully created. Connection to Cosmos DB is working.");
+                
+                connectionSuccess = true;
+            } catch (Exception e) {
+                logger.error("Failed to connect to Cosmos DB on attempt {}: {}", retryCount + 1, e.getMessage());
+                
+                // Check for specific error conditions to provide better diagnostics
+                if (e.getMessage().contains("Invalid API key")) {
+                    logger.error("Authentication failure - check if your Cosmos DB key is correct.");
+                } else if (e.getMessage().contains("Timed out")) {
+                    logger.error("Connection timed out - check network and firewall settings.");
+                } else if (e.getMessage().contains("Host not found")) {
+                    logger.error("Endpoint not found - verify your Cosmos DB endpoint URL is correct.");
+                }
+                
+                if (retryCount == MAX_RETRIES - 1) {
+                    logger.error("Exhausted all retry attempts. Will attempt local file fallback.");
+                    saveToLocalFile(predictions, "cosmos_fallback_" + System.currentTimeMillis() + ".json");
+                }
+            } finally {
+                if (testClient != null && !connectionSuccess) {
+                    testClient.close();
+                    testClient = null;
+                }
+            }
+        }
+        
+        // Skip batch operation if test connection failed after all retries
+        if (!connectionSuccess) {
+            logger.error("Unable to establish connection with Cosmos DB after {} attempts. Skipping batch processing.", MAX_RETRIES);
+            return;
+        }
+        
+        // Count how many items we're trying to save
+        long itemCount = predictions.count();
+        logger.info("Attempting to save {} items to Cosmos DB", itemCount);
+        
+        // Process each partition of the predictions DataFrame with batch mode for better efficiency
+        try {
+            // Make copies of these variables to make them effectively final for the lambda
+            final String finalEndpoint = endpoint;
+            final String finalKey = key;
+            final String finalDatabase = database;
+            final String finalContainer = container;
+            final CosmosClient finalTestClient = testClient;
             
-            CosmosContainer cosmosContainer = cosmosClient.getDatabase(database)
-                    .getContainer(container);
-            
-            // Process each row in this partition
-            partition.forEachRemaining(row -> {
+            predictions.foreachPartition(partition -> {
+                // Count items in this partition for batching
+                List<Row> partitionRows = new ArrayList<>();
+                while (partition.hasNext()) {
+                    partitionRows.add(partition.next());
+                }
+                
+                logger.info("Processing partition with {} rows", partitionRows.size());
+                
+                // Initialize counters
+                AtomicInteger successCount = new AtomicInteger(0);
+                AtomicInteger errorCount = new AtomicInteger(0);
+                AtomicInteger batchSize = new AtomicInteger(0);
+                
+                // Use client from test connection if possible to avoid reconnection
+                CosmosClient cosmosClient = null;
                 try {
-                    // Create document with ID, vector features, and prediction
-                    VectorDocument doc = new VectorDocument();
-                    doc.setId(UUID.randomUUID().toString());
+                    // Reuse test client if available - we check if it's not null
+                    // CosmosClient doesn't have an isClosed() method
+                    if (finalTestClient != null) {
+                        try {
+                            // Test if the client is still valid by performing a simple operation
+                            finalTestClient.readAllDatabases();
+                            cosmosClient = finalTestClient;
+                            logger.info("Reusing existing Cosmos DB connection");
+                        } catch (Exception e) {
+                            logger.warn("Previous client is no longer valid, creating a new one");
+                            cosmosClient = null;
+                        }
+                    }
                     
-                    // Extract feature vector and convert to array
-                    org.apache.spark.ml.linalg.Vector features = row.getAs("features");
-                    double[] featureArray = features.toArray();
-                    doc.setFeatures(featureArray);
+                    if (cosmosClient == null) {
+                        // Create new client if needed
+                        cosmosClient = new CosmosClientBuilder()
+                                .endpoint(finalEndpoint)
+                                .key(finalKey)
+                                .consistencyLevel(ConsistencyLevel.EVENTUAL)
+                                .buildClient();
+                        logger.info("Created new Cosmos DB connection");
+                    }
                     
-                    // Get prediction - convert to human-readable form
-                    double prediction = row.getAs("prediction");
-                    doc.setPrediction(prediction);
-                    doc.setMushroomClass(prediction < 0.5 ? "edible" : "poisonous");
+                    CosmosContainer cosmosContainer = cosmosClient.getDatabase(finalDatabase)
+                            .getContainer(finalContainer);
                     
-                    // Add metadata
-                    doc.setCreatedAt(System.currentTimeMillis());
-                    doc.setDatasetType("agaricus");
+                    // Process in smaller batches for better reliability
+                    final int BATCH_SIZE = 25;
+                    List<List<Row>> batches = new ArrayList<>();
                     
-                    // Save to Cosmos DB
-                    cosmosContainer.createItem(doc, new CosmosItemRequestOptions());
+                    // Create batches
+                    for (int i = 0; i < partitionRows.size(); i += BATCH_SIZE) {
+                        batches.add(partitionRows.subList(i, Math.min(i + BATCH_SIZE, partitionRows.size())));
+                    }
+                    
+                    logger.info("Split partition into {} batches of approximately {} items each", 
+                            batches.size(), BATCH_SIZE);
+                    
+                    for (List<Row> batch : batches) {
+                        // Process each batch with retry logic
+                        for (int retryAttempt = 0; retryAttempt < MAX_RETRIES; retryAttempt++) {
+                            try {
+                                if (retryAttempt > 0) {
+                                    logger.info("Retrying batch (attempt {} of {})", retryAttempt + 1, MAX_RETRIES);
+                                    Thread.sleep(1000 * (long)Math.pow(2, retryAttempt));
+                                }
+                                
+                                int batchSuccessCount = 0;
+                                List<VectorDocument> batchFailures = new ArrayList<>();
+                                
+                                // Process each row in this batch
+                                for (Row row : batch) {
+                                    try {
+                                        // Create document with ID, vector features, and prediction
+                                        VectorDocument doc = new VectorDocument();
+                                        doc.setId(UUID.randomUUID().toString());
+                                        
+                                        // Extract feature vector and convert to array
+                                        org.apache.spark.ml.linalg.Vector features = row.getAs("features");
+                                        double[] featureArray = features.toArray();
+                                        doc.setFeatures(featureArray);
+                                        
+                                        // Get prediction - convert to human-readable form
+                                        double prediction = row.getAs("prediction");
+                                        doc.setPrediction(prediction);
+                                        doc.setMushroomClass(prediction < 0.5 ? "edible" : "poisonous");
+                                        
+                                        // Add metadata
+                                        doc.setCreatedAt(System.currentTimeMillis());
+                                        doc.setDatasetType("agaricus");
+                                        
+                                        // Save to Cosmos DB with timeout setting
+                                        CosmosItemRequestOptions options = new CosmosItemRequestOptions();
+                                        cosmosContainer.createItem(doc, options);
+                                        batchSuccessCount++;
+                                    } catch (Exception e) {
+                                        // Add this row to the failures list for retry
+                                        batchFailures.add(createDocFromRow(row));
+                                    }
+                                }
+                                
+                                // If all items in batch succeeded, we're done with this batch
+                                if (batchFailures.isEmpty()) {
+                                    successCount.addAndGet(batchSuccessCount);
+                                    break; // Exit retry loop for this batch
+                                } else if (retryAttempt == MAX_RETRIES - 1) {
+                                    // Last retry attempt - add successful items to count
+                                    successCount.addAndGet(batchSuccessCount);
+                                    errorCount.addAndGet(batchFailures.size());
+                                    
+                                    // Log the failed items to a file for later processing
+                                    saveFailedItemsToFile(batchFailures);
+                                }
+                            } catch (Exception e) {
+                                logger.error("Error processing batch on attempt {}: {}", 
+                                        retryAttempt + 1, e.getMessage());
+                                
+                                if (retryAttempt == MAX_RETRIES - 1) {
+                                    // On final attempt, count whole batch as error
+                                    errorCount.addAndGet(batch.size());
+                                }
+                            }
+                        }
+                        
+                        // Log progress after each batch
+                        batchSize.addAndGet(batch.size());
+                        logger.info("Processed {} of {} documents ({}% complete, {} successes, {} errors)", 
+                                batchSize.get(), partitionRows.size(),
+                                String.format("%.1f", (batchSize.get() * 100.0 / partitionRows.size())),
+                                successCount.get(), errorCount.get());
+                    }
+                    
+                    logger.info("Partition processing complete. Saved {} documents, encountered {} errors", 
+                            successCount.get(), errorCount.get());
+                    
                 } catch (Exception e) {
-                    logger.error("Error saving vector to Cosmos DB", e);
+                    logger.error("Fatal error in partition processing for Cosmos DB: {}", e.getMessage());
+                    logger.error("Details: ", e);
+                } finally {
+                    // Only close the client if we created it in this method
+                    if (cosmosClient != null && cosmosClient != finalTestClient) {
+                        cosmosClient.close();
+                    }
                 }
             });
             
-            // Close the client
-            cosmosClient.close();
-        });
+            logger.info("All partitions processed for Cosmos DB storage");
+        } catch (Exception e) {
+            logger.error("Failed to execute Cosmos DB save operation: {}", e.getMessage(), e);
+            logger.error("Falling back to local file storage");
+            saveToLocalFile(predictions, "cosmos_error_fallback_" + System.currentTimeMillis() + ".json");
+        } finally {
+            // Close the test client if it's still open
+            if (testClient != null) {
+                testClient.close();
+            }
+        }
+    }
+    
+    /**
+     * Create a VectorDocument from a Spark Row
+     */
+    private static VectorDocument createDocFromRow(Row row) {
+        VectorDocument doc = new VectorDocument();
+        doc.setId(UUID.randomUUID().toString());
+        
+        // Extract feature vector and convert to array
+        org.apache.spark.ml.linalg.Vector features = row.getAs("features");
+        double[] featureArray = features.toArray();
+        doc.setFeatures(featureArray);
+        
+        // Get prediction - convert to human-readable form
+        double prediction = row.getAs("prediction");
+        doc.setPrediction(prediction);
+        doc.setMushroomClass(prediction < 0.5 ? "edible" : "poisonous");
+        
+        // Add metadata
+        doc.setCreatedAt(System.currentTimeMillis());
+        doc.setDatasetType("agaricus");
+        
+        return doc;
+    }
+    
+    /**
+     * Save failed items to a local file for later reprocessing
+     */
+    private static void saveFailedItemsToFile(List<VectorDocument> failedItems) {
+        String filename = "cosmos_failed_items_" + System.currentTimeMillis() + ".json";
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(filename))) {
+            // Using simple JSON serialization for the failed items
+            for (VectorDocument doc : failedItems) {
+                // Convert to simple JSON format
+                String json = String.format(
+                    "{\"id\":\"%s\",\"prediction\":%f,\"mushroomClass\":\"%s\",\"createdAt\":%d,\"datasetType\":\"%s\"}",
+                    doc.getId(), doc.getPrediction(), doc.getMushroomClass(), doc.getCreatedAt(), doc.getDatasetType());
+                writer.write(json);
+                writer.newLine();
+            }
+            logger.info("Saved {} failed items to {}", failedItems.size(), filename);
+        } catch (IOException e) {
+            logger.error("Error saving failed items to file: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Fallback method to save predictions to a local file when Cosmos DB is unavailable
+     */
+    private static void saveToLocalFile(Dataset<Row> predictions, String filename) {
+        logger.info("Saving predictions to local file: {}", filename);
+        try {
+            // Create a temporary directory if needed
+            File backupDir = new File("cosmos_backups");
+            if (!backupDir.exists()) {
+                backupDir.mkdir();
+            }
+            
+            // Full path for the backup file
+            String fullPath = new File(backupDir, filename).getAbsolutePath();
+            
+            // Save as JSON file with timestamp in filename
+            long saveCount = predictions.count();
+            predictions.write().mode("overwrite").json(fullPath);
+            
+            logger.info("Successfully saved {} vector documents to {}", saveCount, fullPath);
+            logger.info("To import this data to Cosmos DB later, use the Azure CLI or SDK.");
+        } catch (Exception e) {
+            logger.error("Error saving to local file: {}", e.getMessage());
+        }
     }
     
     /**

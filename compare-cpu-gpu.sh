@@ -1,8 +1,15 @@
 #!/bin/bash
 # compare-cpu-gpu.sh - Script to run both CPU and GPU versions and compare performance
 
-# Set Java 21 compatibility flags
+# Set Java 21 compatibility flags - expanded for DirectByteBuffer issue
 JAVA_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED"
+JAVA_OPTS="$JAVA_OPTS --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
+JAVA_OPTS="$JAVA_OPTS --add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-exports=java.base/jdk.internal.ref=ALL-UNNAMED"
+
+# Add Java 21 platform-specific system properties
+JAVA_OPTS="$JAVA_OPTS -Dspark.unsafe.platformFallback=true -Dio.netty.noUnsafe=true -Dio.netty.tryReflectionSetAccessible=true"
+JAVA_OPTS="$JAVA_OPTS -Dspark.memory.offHeap.enabled=false -Dspark.unsafe.exceptionOnMemoryLeak=false" 
+JAVA_OPTS="$JAVA_OPTS -Dspark.shuffle.io.preferDirectBufs=false -Djdk.reflect.useDirectMethodHandle=false"
 
 # Default data path - can be overridden with first argument
 DATA_PATH=${1:-"./scripts/tmp_data/agaricus_data.csv"}
@@ -20,12 +27,28 @@ echo ""
 # Create results directory if it doesn't exist
 mkdir -p ./results
 
+# Check if we need to build the CPU jar
+if [ ! -f "target/xgboost-rapids-aca-cpu-1.0-SNAPSHOT.jar" ] && [ ! -f "target/xgboost-rapids-aca-1.0-SNAPSHOT-shaded.jar" ]; then
+  echo "🔨 Building CPU version..."
+  mvn clean package -P cpu
+  echo "✅ CPU build completed"
+else
+  echo "✅ Using existing CPU build"
+fi
+echo ""
+
 # Run CPU version
 echo "🔄 Running CPU version..."
 CPU_START_TIME=$(date +%s)
 
+# Determine which JAR file to use
+CPU_JAR_FILE="target/xgboost-rapids-aca-cpu-1.0-SNAPSHOT.jar"
+if [ ! -f "$CPU_JAR_FILE" ]; then
+  CPU_JAR_FILE="target/xgboost-rapids-aca-1.0-SNAPSHOT-shaded.jar"
+fi
+
 # Capture CPU logs
-java $JAVA_OPTS -jar target/xgboost-rapids-aca-1.0-SNAPSHOT.jar \
+java $JAVA_OPTS -jar $CPU_JAR_FILE \
   --data-source "$DATA_PATH" \
   --use-gpu "false" \
   $OTHER_ARGS > ./results/cpu_output.log 2>&1
@@ -36,12 +59,28 @@ CPU_DURATION=$((CPU_END_TIME - CPU_START_TIME))
 echo "✅ CPU run completed in $CPU_DURATION seconds"
 echo ""
 
+# Check if we need to build the GPU jar
+if [ ! -f "target/xgboost-rapids-aca-gpu-1.0-SNAPSHOT.jar" ] && [ ! -f "target/xgboost-rapids-aca-1.0-SNAPSHOT-shaded.jar" ]; then
+  echo "🔨 Building GPU version..."
+  mvn package -P gpu
+  echo "✅ GPU build completed"
+else
+  echo "✅ Using existing GPU build"
+fi
+echo ""
+
 # Run GPU version
 echo "🔄 Running GPU version..."
 GPU_START_TIME=$(date +%s)
 
+# Determine which JAR file to use
+GPU_JAR_FILE="target/xgboost-rapids-aca-gpu-1.0-SNAPSHOT.jar"
+if [ ! -f "$GPU_JAR_FILE" ]; then
+  GPU_JAR_FILE="target/xgboost-rapids-aca-1.0-SNAPSHOT-shaded.jar"
+fi
+
 # Capture GPU logs
-java $JAVA_OPTS -jar target/xgboost-rapids-aca-1.0-SNAPSHOT.jar \
+java $JAVA_OPTS -jar $GPU_JAR_FILE \
   --data-source "$DATA_PATH" \
   --use-gpu "true" \
   $OTHER_ARGS > ./results/gpu_output.log 2>&1

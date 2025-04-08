@@ -1,29 +1,82 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
-
-    <groupId>com.azure.rapids</groupId>
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">    <modelVersion>4.0.0</modelVersion>    <groupId>com.azure.rapids</groupId>
     <artifactId>xgboost-rapids-aca</artifactId>
-    <version>1.0-SNAPSHOT</version>
-
-    <properties>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
+    <version>1.0-SNAPSHOT</version>    <properties>        <maven.compiler.source>17</maven.compiler.source>        <maven.compiler.target>17</maven.compiler.target>
         <scala.version>2.12</scala.version>
-        <spark.version>3.5.1</spark.version>
-        <xgboost.version>2.0.3</xgboost.version>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <spark.version>3.3.2</spark.version>
+        <xgboost.version>2.0.3</xgboost.version>        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <rapids.version>23.06.0</rapids.version>
+        <!-- Add system parameters for JDK compatibility but with fewer flags needed for Java 17 -->
+        <argLine.java17>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED</argLine.java17>
     </properties>
 
-    <dependencies>
+    <!-- Repositories for NVIDIA packages -->
+    <repositories>
+        <repository>
+            <id>rapids-release</id>
+            <url>https://repo.rapids.ai/artifactory/gcs-maven-releases</url>
+        </repository>
+    </repositories>
+    
+    <!-- Define profiles for CPU and GPU versions --><profiles>
+        <profile>
+            <id>cpu</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <properties>
+                <jar.finalName>${project.artifactId}-cpu-${project.version}</jar.finalName>
+            </properties>
+            <dependencies>
+                <!-- XGBoost4J CPU Support -->
+                <dependency>
+                    <groupId>ml.dmlc</groupId>
+                    <artifactId>xgboost4j-spark_${scala.version}</artifactId>
+                    <version>${xgboost.version}</version>
+                </dependency>
+            </dependencies>
+        </profile>        <profile>
+            <id>gpu</id>
+            <properties>
+                <jar.finalName>${project.artifactId}-gpu-${project.version}</jar.finalName>
+            </properties>
+            <dependencies>
+                <!-- XGBoost4J GPU Support -->
+                <dependency>
+                    <groupId>ml.dmlc</groupId>
+                    <artifactId>xgboost4j-spark-gpu_${scala.version}</artifactId>
+                    <version>${xgboost.version}</version>
+                </dependency>
+                <!-- NVIDIA RAPIDS Accelerator for Spark -->
+                <dependency>
+                    <groupId>com.nvidia</groupId>
+                    <artifactId>rapids-4-spark_${scala.version}</artifactId>
+                    <version>${rapids.version}</version>
+                </dependency>
+                <!-- CUDA Runtime -->
+                <dependency>
+                    <groupId>ai.rapids</groupId>
+                    <artifactId>cudf</artifactId>
+                    <version>${rapids.version}</version>
+                    <classifier>cuda11</classifier>
+                </dependency>
+            </dependencies>
+        </profile>
+    </profiles>    <dependencies>
         <!-- Apache Spark Java API -->
         <dependency>
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-core_${scala.version}</artifactId>
             <version>${spark.version}</version>
             <!-- Removing 'provided' scope to include in jar -->
+            <exclusions>
+                <exclusion>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-all</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.apache.spark</groupId>
@@ -36,20 +89,63 @@
             <artifactId>spark-mllib_${scala.version}</artifactId>
             <version>${spark.version}</version>
             <!-- Removing 'provided' scope to include in jar -->
-        </dependency>
-
-        <!-- XGBoost4J GPU Support -->
-        <dependency>
-            <groupId>ml.dmlc</groupId>
-            <artifactId>xgboost4j-spark-gpu_${scala.version}</artifactId>
-            <version>${xgboost.version}</version>
-        </dependency>
-
-        <!-- Cosmos DB Java SDK -->
+        </dependency><!-- Cosmos DB Java SDK -->
         <dependency>
             <groupId>com.azure</groupId>
             <artifactId>azure-cosmos</artifactId>
-            <version>4.58.0</version>
+            <version>4.45.0</version> <!-- Using an older, more stable version -->
+        </dependency>
+          <!-- Complete set of Netty dependencies with exact versions used by reactor-netty -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+            <version>4.1.94.Final</version>
+        </dependency>
+        
+        <!-- Additional Netty components for Java 21 compatibility -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-buffer</artifactId>
+            <version>4.1.94.Final</version>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-common</artifactId>
+            <version>4.1.94.Final</version>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport</artifactId>
+            <version>4.1.94.Final</version>
+        </dependency>
+        
+        <!-- Reactor-Netty dependency explicitly included -->
+        <dependency>
+            <groupId>io.projectreactor.netty</groupId>
+            <artifactId>reactor-netty-http</artifactId>
+            <version>1.0.34</version>
+        </dependency>
+        
+        <!-- Jackson dependencies required by Cosmos DB SDK (version compatible with Spark's Scala module) -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-core</artifactId>
+            <version>2.15.2</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.15.2</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
+            <version>2.15.2</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.module</groupId>
+            <artifactId>jackson-module-scala_${scala.version}</artifactId>
+            <version>2.15.2</version>
         </dependency>
 
         <!-- Azure Storage for Data Access -->
@@ -57,9 +153,7 @@
             <groupId>com.azure</groupId>
             <artifactId>azure-storage-blob</artifactId>
             <version>12.26.0</version>
-        </dependency>
-
-        <!-- Logging -->
+        </dependency>        <!-- Logging -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
@@ -70,21 +164,52 @@
             <artifactId>slf4j-simple</artifactId>
             <version>2.0.9</version>
         </dependency>
+          <!-- Java 21 compatibility helper for DirectByteBuffer issue -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport-native-epoll</artifactId>
+            <version>4.1.94.Final</version>
+            <classifier>linux-x86_64</classifier>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport-classes-epoll</artifactId>
+            <version>4.1.94.Final</version>
+        </dependency>
+        
+        <!-- Additional dependencies for Java 21 compatibility with Spark -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-handler</artifactId>
+            <version>4.1.94.Final</version>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec-http</artifactId>
+            <version>4.1.94.Final</version>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-resolver</artifactId>
+            <version>4.1.94.Final</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <version>3.14.0</version>
+        </dependency>
     </dependencies>
 
     <build>
         <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
+            <plugin>                <groupId>org.apache.maven.plugins</groupId>                <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.11.0</version>
                 <configuration>
                     <source>${maven.compiler.source}</source>
                     <target>${maven.compiler.target}</target>
-                    <release>21</release>
+                    <release>17</release>
                 </configuration>
-            </plugin>
-            <plugin>
+            </plugin>            <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
                 <version>3.5.1</version>
@@ -95,6 +220,9 @@
                             <goal>shade</goal>
                         </goals>
                         <configuration>
+                            <finalName>${jar.finalName}</finalName>
+                            <shadedArtifactAttached>false</shadedArtifactAttached>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>com.azure.rapids.xgboost.XGBoostRapidsAzure</mainClass>
@@ -118,13 +246,6 @@
                                     </excludes>
                                 </filter>
                             </filters>
-                            <createDependencyReducedPom>true</createDependencyReducedPom>
-                            <relocations>
-                                <relocation>
-                                    <pattern>com.google</pattern>
-                                    <shadedPattern>com.shaded.google</shadedPattern>
-                                </relocation>
-                            </relocations>
                         </configuration>
                     </execution>
                 </executions>

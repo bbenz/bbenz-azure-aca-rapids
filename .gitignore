@@ -16,6 +16,7 @@ target/
 # Temporary data directories
 scripts/tmp_data/
 tmp_data/
+cosmos_backups/
 
 # Logs
 *.log
@@ -69,3 +70,4 @@ ENV/
 .env/
 .venv/
 pyenv/
+results/performance_report.md

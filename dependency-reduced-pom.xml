@@ -25,6 +25,8 @@
               <goal>shade</goal>
             </goals>
             <configuration>
+              <finalName>${jar.finalName}</finalName>
+              <shadedArtifactAttached>false</shadedArtifactAttached>
               <transformers>
                 <transformer>
                   <mainClass>com.azure.rapids.xgboost.XGBoostRapidsAzure</mainClass>
@@ -61,11 +63,58 @@
       </plugin>
     </plugins>
   </build>
+  <profiles>
+    <profile>
+      <id>cpu</id>
+      <dependencies>
+        <dependency>
+          <groupId>ml.dmlc</groupId>
+          <artifactId>xgboost4j-spark_${scala.version}</artifactId>
+          <version>${xgboost.version}</version>
+        </dependency>
+      </dependencies>
+      <properties>
+        <jar.finalName>${project.artifactId}-cpu-${project.version}</jar.finalName>
+      </properties>
+    </profile>
+    <profile>
+      <id>gpu</id>
+      <dependencies>
+        <dependency>
+          <groupId>ml.dmlc</groupId>
+          <artifactId>xgboost4j-spark-gpu_${scala.version}</artifactId>
+          <version>${xgboost.version}</version>
+        </dependency>
+        <dependency>
+          <groupId>com.nvidia</groupId>
+          <artifactId>rapids-4-spark_${scala.version}</artifactId>
+          <version>${rapids.version}</version>
+        </dependency>
+        <dependency>
+          <groupId>ai.rapids</groupId>
+          <artifactId>cudf</artifactId>
+          <version>${rapids.version}</version>
+          <classifier>cuda11</classifier>
+        </dependency>
+      </dependencies>
+      <properties>
+        <jar.finalName>${project.artifactId}-gpu-${project.version}</jar.finalName>
+      </properties>
+    </profile>
+  </profiles>
+  <repositories>
+    <repository>
+      <id>rapids-release</id>
+      <url>https://repo.rapids.ai/artifactory/gcs-maven-releases</url>
+    </repository>
+  </repositories>
   <properties>
     <maven.compiler.source>21</maven.compiler.source>
     <xgboost.version>2.0.3</xgboost.version>
+    <argLine.java21>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.nio.Buffer=ALL-UNNAMED --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-exports=java.base/jdk.internal.ref=ALL-UNNAMED --add-exports=java.base/sun.security.action=ALL-UNNAMED</argLine.java21>
+    <rapids.version>23.06.0</rapids.version>
     <maven.compiler.target>21</maven.compiler.target>
-    <spark.version>3.5.1</spark.version>
+    <spark.version>3.3.2</spark.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <scala.version>2.12</scala.version>
   </properties>
