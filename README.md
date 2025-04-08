@@ -2,6 +2,9 @@
 
 This project demonstrates how to run GPU-accelerated XGBoost machine learning models using NVIDIA RAPIDS on Azure Container Apps. The implementation uses Apache Spark with RAPIDS acceleration to process the Agaricus mushroom dataset, train an XGBoost classification model to identify edible vs. poisonous mushrooms, and store vector embeddings in Azure Cosmos DB.
 
+Shortlink: https://aka.ms/sparkrapidsgpudemo
+
+
 ## Overview
 
 The application:
